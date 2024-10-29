@@ -1,15 +1,23 @@
 # frozen_string_literal: true
 
+require 'securerandom'
 require 'concurrent'
 
 module MicroBatching
   class Batcher
-    SUBMITTED = 'job-submitted'
-    PROCESSING = 'job-processing'
-    COMPLETED = 'job-completed'
-    FAILED = 'job-failed'
+    JOB_SUBMITTED = 'job-submitted'.freeze
+    JOB_PROCESSING = 'job-processing'.freeze
+    JOB_COMPLETED = 'job-completed'.freeze
+    JOB_FAILED = 'job-failed'.freeze
+
+    BATCHER_START = 'batcher-start'.freeze
+    BATCHER_SHUTTING_DOWN = 'batcher-shutting-down'.freeze
+    BATCHER_SHUTDOWN = 'batcher-shutdown'.freeze
+
+    attr_reader :id
 
     def initialize(batch_size:, max_queue_size: , frequency:, batch_processor:, event_broadcaster: nil)
+      @id = SecureRandom.uuid
       @batch_size = batch_size
       @max_queue_size = max_queue_size
       @frequency = frequency
@@ -30,13 +38,15 @@ module MicroBatching
       end
 
       @jobs_queue.push(job)
-      broadcast_event_for_job(job, SUBMITTED)
+      broadcast_event_for_job(job, JOB_SUBMITTED)
       MicroBatching::JobResult.new(job.id)
     end
 
     def shutdown
+      broadcast_event(BATCHER_SHUTTING_DOWN, { id: @id })
       @shutdown_requested.make_true
       @timer_task.wait_for_termination
+      broadcast_event(BATCHER_SHUTDOWN, { id: @id })
       true
     end
 
@@ -47,6 +57,8 @@ module MicroBatching
         process_batch
       end
       @timer_task.execute
+
+      broadcast_event(BATCHER_START, { id: @id })
     end
 
     def process_batch
@@ -54,20 +66,23 @@ module MicroBatching
 
       @batch_size.times do
         break if @jobs_queue.empty?
-        batch << @jobs_queue.pop
+        batch << @jobs_queue.pop(true)
       end
 
-      # Jobs may need to be transformed into a structure compatible with the batch processor
       if batch.any?
-        broadcast_event_for_jobs(batch, PROCESSING)
+        broadcast_event_for_jobs(batch, JOB_PROCESSING)
         # TODO: process the result of the batch processor and broadcast appropriate events
         result = @batch_processor.process(batch)
-        broadcast_event_for_jobs(batch, COMPLETED)
+        broadcast_event_for_jobs(batch, JOB_COMPLETED)
       end
     rescue StandardError => e
-      broadcast_event_for_jobs(batch, FAILED, { error: e.message })
+      broadcast_event_for_jobs(batch, JOB_FAILED, { error: e.message })
     ensure
       @timer_task.shutdown if @shutdown_requested.true? && @jobs_queue.empty?
+    end
+
+    def broadcast_event(event, data)
+      @event_broadcaster&.broadcast(event, data)
     end
 
     def broadcast_event_for_jobs(jobs, event, data = {})
@@ -77,7 +92,7 @@ module MicroBatching
     end
 
     def broadcast_event_for_job(job, event, data = {})
-      @event_broadcaster&.broadcast(event, data.merge(id: job.id))
+      broadcast_event(event, data.merge(id: job.id))
     end
   end
 end

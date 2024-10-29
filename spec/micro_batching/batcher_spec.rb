@@ -47,6 +47,17 @@ RSpec.describe MicroBatching::Batcher do
       event_broadcaster: event_broadcaster)
   }
 
+  describe '#initialize' do
+    it 'sets the id' do
+      expect(batcher.id).not_to be_nil
+    end
+
+    it 'broadcasts batcher start event' do
+      batcher
+      expect(event_broadcaster.events.select { |event| event[:event] == 'batcher-start' }.size).to eq(1)
+    end
+  end
+
   describe '#submit' do
     it 'pushes the given job to the queue' do
       job = MicroBatching::Job.new('data')
@@ -93,6 +104,17 @@ RSpec.describe MicroBatching::Batcher do
       expect(batcher.instance_variable_get(:@timer_task)).not_to be_running
       expect(result).to be(true)
     end
+
+    it 'broadcasts batcher shutdown events' do
+      submit_jobs(batcher, 5)
+
+      sleep(0.1)
+
+      batcher.shutdown
+
+      expect(event_broadcaster.events.select { |event| event[:event] == 'batcher-shutting-down' }.size).to eq(1)
+      expect(event_broadcaster.events.select { |event| event[:event] == 'batcher-shutdown' }.size).to eq(1)
+    end
   end
 
   describe 'jobs processing' do
@@ -122,12 +144,13 @@ RSpec.describe MicroBatching::Batcher do
       expect(batch_processor.processed_jobs.map(&:data)).to eq((0..30).to_a)
     end
 
-    it 'broadcast job-completed events' do
+    it 'broadcast appropriate events' do
       submit_jobs(batcher, 31)
 
       sleep(0.2)
 
-      expect(event_broadcaster.events.size).to eq(93)
+      expect(event_broadcaster.events.size).to eq(94)
+      expect(event_broadcaster.events.select { |event| event[:event] == 'batcher-start' }.size).to eq(1)
       expect(event_broadcaster.events.select { |event| event[:event] == 'job-submitted' }.size).to eq(31)
       expect(event_broadcaster.events.select { |event| event[:event] == 'job-processing' }.size).to eq(31)
       expect(event_broadcaster.events.select { |event| event[:event] == 'job-completed' }.size).to eq(31)
@@ -155,9 +178,6 @@ RSpec.describe MicroBatching::Batcher do
 
         sleep(0.2)
 
-        expect(event_broadcaster.events.size).to eq(93)
-        expect(event_broadcaster.events.select { |event| event[:event] == 'job-submitted' }.size).to eq(31)
-        expect(event_broadcaster.events.select { |event| event[:event] == 'job-processing' }.size).to eq(31)
         expect(event_broadcaster.events.select { |event| event[:event] == 'job-failed' }.size).to eq(31)
         expect(event_broadcaster.events.select { |event| event[:event] == 'job-failed' }.all? {|event| event[:data][:error] == 'An error occurred'}).to be(true)
       end
