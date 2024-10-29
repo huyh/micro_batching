@@ -4,6 +4,25 @@ require 'securerandom'
 require 'concurrent'
 
 module MicroBatching
+  # The Batcher class handles micro-batching for job processing, grouping jobs and submitting them to
+  # a batch processor in batches. It supports job submission, scheduled batch processing, and an optional
+  # event broadcasting mechanism for monitoring batch and job status.
+  #
+  # Constants:
+  # - JOB_SUBMITTED: Broadcasted when a job is submitted.
+  # - JOB_PROCESSING: Broadcasted when a batch of jobs starts processing.
+  # - JOB_COMPLETED: Broadcasted when a batch of jobs completes processing.
+  # - JOB_FAILED: Broadcasted if a batch processing fails.
+  # - BATCHER_START: Broadcasted when the batcher is started.
+  # - BATCHER_SHUTTING_DOWN: Broadcasted when the batcher begins shutting down.
+  # - BATCHER_SHUTDOWN: Broadcasted when the batcher has shut down.
+  #
+  # Example:
+  #   batcher = MicroBatching::Batcher.new(
+  #     batch_size: 10, max_queue_size: 100, frequency: 5, batch_processor: processor
+  #   )
+  #   batcher.submit(job)
+  #   batcher.shutdown
   class Batcher
     JOB_SUBMITTED = 'job-submitted'.freeze
     JOB_PROCESSING = 'job-processing'.freeze
@@ -14,9 +33,19 @@ module MicroBatching
     BATCHER_SHUTTING_DOWN = 'batcher-shutting-down'.freeze
     BATCHER_SHUTDOWN = 'batcher-shutdown'.freeze
 
+    # @return [String] the unique identifier of the batcher
     attr_reader :id
 
-    def initialize(batch_size:, max_queue_size: , frequency:, batch_processor:, event_broadcaster: nil)
+    # Initializes a new Batcher instance.
+    #
+    # @param batch_size [Integer] The number of jobs to process in each batch.
+    # @param max_queue_size [Integer] The maximum number of jobs allowed in the queue.
+    # @param frequency [Float] The interval (in seconds) for processing batches.
+    # @param batch_processor [Object] The processor that handles job batches.
+    # @param event_broadcaster [Object, nil] Optional broadcaster for job and batch status updates.
+    #
+    # @return [MicroBatching::Batcher]
+    def initialize(batch_size:, max_queue_size:, frequency:, batch_processor:, event_broadcaster: nil)
       @id = SecureRandom.uuid
       @batch_size = batch_size
       @max_queue_size = max_queue_size
@@ -28,6 +57,14 @@ module MicroBatching
       start
     end
 
+    # Submits a job to the batcher for processing.
+    #
+    # @param job [Object] The job to be submitted.
+    #
+    # @raise [MicroBatching::Errors::BatcherShuttingDownError] if the batcher is shutting down.
+    # @raise [MicroBatching::Errors::QueueFullError] if the queue is at maximum capacity.
+    #
+    # @return [MicroBatching::JobResult] The job result object associated with the job.
     def submit(job)
       if @shutdown_requested.true?
         raise MicroBatching::Errors::BatcherShuttingDownError.new('Batcher is shutting down')
@@ -42,6 +79,12 @@ module MicroBatching
       MicroBatching::JobResult.new(job.id)
     end
 
+    # Initiates the shutdown process for the batcher.
+    #
+    # No new jobs will be accepted after calling this method. The batcher will continue processing
+    # remaining jobs in the queue until it is empty, then shut down.
+    #
+    # @return [Boolean] Returns true once all jobs are processed and the batcher is shut down.
     def shutdown
       broadcast_event(BATCHER_SHUTTING_DOWN, { id: @id })
       @shutdown_requested.make_true
@@ -52,6 +95,9 @@ module MicroBatching
 
     private
 
+    # Starts the batch processing timer task, which triggers batch processing at the specified frequency.
+    #
+    # @return [void]
     def start
       @timer_task = Concurrent::TimerTask.new(execution_interval: @frequency) do
         process_batch
@@ -61,6 +107,12 @@ module MicroBatching
       broadcast_event(BATCHER_START, { id: @id })
     end
 
+    # Processes a batch of jobs from the queue, up to the configured batch size.
+    #
+    # Retrieves up to `batch_size` jobs from the queue, sends them to the batch processor,
+    # and broadcasts job events indicating the processing status.
+    #
+    # @return [void]
     def process_batch
       batch = []
 
@@ -71,7 +123,6 @@ module MicroBatching
 
       if batch.any?
         broadcast_event_for_jobs(batch, JOB_PROCESSING)
-        # TODO: process the result of the batch processor and broadcast appropriate events
         result = @batch_processor.process(batch)
         broadcast_event_for_jobs(batch, JOB_COMPLETED)
       end
@@ -81,16 +132,36 @@ module MicroBatching
       @timer_task.shutdown if @shutdown_requested.true? && @jobs_queue.empty?
     end
 
+    # Broadcasts a general event through the event broadcaster, if available.
+    #
+    # @param event [String] The event name.
+    # @param data [Hash] Additional data to include in the event broadcast.
+    #
+    # @return [void]
     def broadcast_event(event, data)
       @event_broadcaster&.broadcast(event, data)
     end
 
+    # Broadcasts an event for each job in a batch.
+    #
+    # @param jobs [Array<MicroBatching::Job>] The jobs for which to broadcast the event.
+    # @param event [String] The event name.
+    # @param data [Hash] Additional data to include in each job's event.
+    #
+    # @return [void]
     def broadcast_event_for_jobs(jobs, event, data = {})
       if @event_broadcaster
         jobs.each { |job| broadcast_event_for_job(job, event, data) }
       end
     end
 
+    # Broadcasts an event for a single job.
+    #
+    # @param job [MicroBatching::Job] The job for which to broadcast the event.
+    # @param event [String] The event name.
+    # @param data [Hash] Additional data to include in the event.
+    #
+    # @return [void]
     def broadcast_event_for_job(job, event, data = {})
       broadcast_event(event, data.merge(id: job.id))
     end

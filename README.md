@@ -8,7 +8,7 @@ This Ruby library implements a micro-batching system designed for processing tas
 - **Configurable Batching**: Customize batch size, frequency of processing, and queue capacity.
 - **Job Submission**: Submit individual jobs, which are processed in batches.
 - **Graceful Shutdown**: Allows for orderly shutdown, processing remaining jobs before exit.
-- **Job Status Updates**: Each job result is updated with success or failure status upon completion.
+- **Job Status Updates**: Broadcasts job processing status updates to subscribers.
 
 ## Installation
 
@@ -33,7 +33,8 @@ require 'micro_batching'
 batch_processor = YourBatchProcessor.new
 # An optional event broadcaster that broadcasts job processing status updates to subscribers. 
 # This can be used, for example, to publish job status updates to pub/sub channels.
-# This should be a class that implements a `broadcast` method that takes an event name and optional data.
+# This should be a class that implements a `broadcast` method that takes 
+# an event name and optional data.
 event_broadcaster = YourEventBroadcaster.new
 
 batcher = MicroBatching::Batcher.new(
@@ -71,31 +72,61 @@ The library provides custom error classes:
 Here's an example of how you might use this library in a real-world scenario:
 
 ```ruby
+require 'securerandom'
 require 'micro_batching'
 
-class YourBatchProcessor
+class BatchProcessor
   def process(jobs)
-    # Process the jobs here
+    jobs.each do |job|
+      puts "Processing job #{job.id} with data #{job.data}"
+    end
   end
 end
 
-batch_processor = YourBatchProcessor.new
+class EventBroadcaster
+  def broadcast(event, data)
+    puts "Broadcasting event #{event} with data: #{data}"
+  end
+end
+
+batch_processor = BatchProcessor.new
+event_broadcaster = EventBroadcaster.new
 
 batcher = MicroBatching::Batcher.new(
   batch_size: 10,
   max_queue_size: 50,
-  frequency: 5,
-  batch_processor: batch_processor
+  frequency: 10,
+  batch_processor: batch_processor,
+  event_broadcaster: event_broadcaster
 )
 
-# Submit jobs
-100.times do |i|
-  job = MicroBatching::Job.new("Job #{i}")
-  batcher.submit(job)
+@shutdown = false
+
+job_submitter_one = Thread.new do
+  while !@shutdown
+    sleep(1)
+    job = MicroBatching::Job.new("job-submitter-one-#{SecureRandom.uuid}")
+    batcher.submit(job)
+  end
 end
 
-# Shut down the batcher after processing all jobs
+job_submitter_two = Thread.new do
+  while !@shutdown
+    sleep(2)
+    job = MicroBatching::Job.new("job-submitter-two-#{SecureRandom.uuid}")
+    batcher.submit(job)
+  end
+end
+
+sleep(50)
+
+@shutdown = true
+job_submitter_one.join
+job_submitter_two.join
+
 batcher.shutdown
+
+sleep(20)
 ```
 
 ## Testing
