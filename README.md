@@ -1,34 +1,111 @@
-# MicroBatching
+# MicroBatching Library
 
-TODO: Delete this and the text below, and describe your gem
+This Ruby library implements a micro-batching system designed for processing tasks in batches to optimize throughput and minimize individual requests to a downstream system. The library allows configurable batch size, frequency, and maximum queue size, providing flexibility for different workload requirements.
 
-Welcome to your new gem! In this directory, you'll find the files you need to be able to package up your Ruby library into a gem. Put your Ruby code in the file `lib/micro_batching`. To experiment with that code, run `bin/console` for an interactive prompt.
+## Features
+
+- **Micro-batching**: Groups jobs into small batches for efficient processing.
+- **Configurable Batching**: Customize batch size, frequency of processing, and queue capacity.
+- **Job Submission**: Submit individual jobs, which are processed in batches.
+- **Graceful Shutdown**: Allows for orderly shutdown, processing remaining jobs before exit.
+- **Job Status Updates**: Each job result is updated with success or failure status upon completion.
 
 ## Installation
 
-TODO: Replace `UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG` with your gem name right after releasing it to RubyGems.org. Please do not do it earlier due to security reasons. Alternatively, replace this section with instructions to install your gem from git if you don't plan to release to RubyGems.org.
+To install this library, add it to your `Gemfile`:
 
-Install the gem and add to the application's Gemfile by executing:
+```ruby
+gem 'micro_batching', github: 'huyh/micro_batching'
 
-    $ bundle add UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG
-
-If bundler is not being used to manage dependencies, install the gem by executing:
-
-    $ gem install UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG
+# Then run:
+bundle install
+```
 
 ## Usage
+### Initialization
+Create a new instance of the MicroBatching::Batcher with the desired configuration:
 
-TODO: Write usage instructions here
+```ruby
+require 'micro_batching'
 
-## Development
+# Replace with your BatchProcessor implementation
+batch_processor = YourBatchProcessor.new
+# Optional event broadcaster to broadcast job status updates
+# to the subscribers. For example, you can use this to publish
+# job status updates to pub/sub channels.
+event_broadcaster = YourEventBroadcaster.new
 
-After checking out the repo, run `bin/setup` to install dependencies. Then, run `rake spec` to run the tests. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
+batcher = MicroBatching::Batcher.new(
+  batch_size: 10,
+  max_queue_size: 50,
+  frequency: 5,
+  batch_processor: batch_processor,
+  event_broadcaster: event_broadcaster
+)
+```
 
-To install this gem onto your local machine, run `bundle exec rake install`. To release a new version, update the version number in `version.rb`, and then run `bundle exec rake release`, which will create a git tag for the version, push git commits and the created tag, and push the `.gem` file to [rubygems.org](https://rubygems.org).
+### Submitting Jobs
+Submit jobs to the batcher for processing:
 
-## Contributing
+```ruby
+job = YourJob.new(data: 'job data')  # Replace with your Job implementation
+job_result = batcher.submit(job)
+```
+The submit method returns a `JobResult` object, which provides the job status update after processing.
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/[USERNAME]/micro_batching.
+### Shutting Down
+To shutdown the batcher, ensuring that all jobs in the queue are processed first:
+
+```ruby
+batcher.shutdown
+```
+## Error Handling
+The library provides custom error classes:
+
+`QueueFullError`: Raised if the job queue exceeds the maximum queue size.
+`BatcherShuttingDownError`: Raised if a job is submitted while the batcher is shutting down.
+
+## Example
+Here's an example of how you might use this library in a real-world scenario:
+
+```ruby
+require 'micro_batching'
+
+class YourBatchProcessor
+  def process(jobs)
+    # Process the jobs here
+  end
+end
+
+batch_processor = YourBatchProcessor.new
+
+batcher = MicroBatching::Batcher.new(
+  batch_size: 10,
+  max_queue_size: 50,
+  frequency: 5,
+  batch_processor: batch_processor
+)
+
+# Submit jobs
+100.times do |i|
+  job = MicroBatching::Job.new(data: "Job #{i}")
+  batcher.submit(job)
+end
+
+# Shut down the batcher after processing all jobs
+batcher.shutdown
+```
+
+## Testing
+To run the tests, execute the following command:
+
+```bash
+bundle exec rspec
+
+or
+
+bundle exec rake spec
+```
 
 ## License
 
