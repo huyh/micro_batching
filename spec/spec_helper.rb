@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "micro_batching"
+require 'micro_batching'
 
 RSpec.configure do |config|
   # Enable flags like --only-failures and --next-failure
