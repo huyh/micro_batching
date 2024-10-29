@@ -28,11 +28,12 @@ Create a new instance of the MicroBatching::Batcher with the desired configurati
 ```ruby
 require 'micro_batching'
 
-# Replace with your BatchProcessor implementation
+# The batch processor that processes the batch of jobs.
+# This should be a class that implements a `process` method that takes an array of jobs.
 batch_processor = YourBatchProcessor.new
-# Optional event broadcaster to broadcast job status updates
-# to the subscribers. For example, you can use this to publish
-# job status updates to pub/sub channels.
+# An optional event broadcaster that broadcasts job processing status updates to subscribers. 
+# This can be used, for example, to publish job status updates to pub/sub channels.
+# This should be a class that implements a `broadcast` method that takes an event name and optional data.
 event_broadcaster = YourEventBroadcaster.new
 
 batcher = MicroBatching::Batcher.new(
@@ -48,10 +49,10 @@ batcher = MicroBatching::Batcher.new(
 Submit jobs to the batcher for processing:
 
 ```ruby
-job = YourJob.new(data: 'job data')  # Replace with your Job implementation
+job = YourJob.new('job data')  # Replace with your Job implementation
 job_result = batcher.submit(job)
 ```
-The submit method returns a `JobResult` object, which provides the job status update after processing.
+The submit method returns a `JobResult` object, which contains the job ID.
 
 ### Shutting Down
 To shutdown the batcher, ensuring that all jobs in the queue are processed first:
@@ -63,6 +64,7 @@ batcher.shutdown
 The library provides custom error classes:
 
 `QueueFullError`: Raised if the job queue exceeds the maximum queue size.
+
 `BatcherShuttingDownError`: Raised if a job is submitted while the batcher is shutting down.
 
 ## Example
@@ -88,7 +90,7 @@ batcher = MicroBatching::Batcher.new(
 
 # Submit jobs
 100.times do |i|
-  job = MicroBatching::Job.new(data: "Job #{i}")
+  job = MicroBatching::Job.new("Job #{i}")
   batcher.submit(job)
 end
 

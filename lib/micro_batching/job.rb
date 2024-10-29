@@ -2,11 +2,13 @@
 
 require 'securerandom'
 
-class MicroBatching::Job
-  def initialize(data)
-    @data = data
-    @id = SecureRandom.uuid
-  end
+module MicroBatching
+  class Job
+    def initialize(data)
+      @data = data
+      @id = SecureRandom.uuid
+    end
 
-  attr_reader :data, :id
+    attr_reader :data, :id
+  end
 end
