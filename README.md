@@ -31,18 +31,25 @@ require 'micro_batching'
 # The batch processor that processes the batch of jobs.
 # This should be a class that implements a `process` method that takes an array of jobs.
 batch_processor = YourBatchProcessor.new
+
 # An optional event broadcaster that broadcasts job processing status updates to subscribers. 
 # This can be used, for example, to publish job status updates to pub/sub channels.
 # This should be a class that implements a `broadcast` method that takes 
 # an event name and optional data.
 event_broadcaster = YourEventBroadcaster.new
 
+# An optional converter that transforms the result returned
+# by the batch_processor's process function into an array format, 
+# such as [true, { error: 'An error message' }, ...].
+result_converter = YourResultConverter.new
+
 batcher = MicroBatching::Batcher.new(
   batch_size: 10,
   max_queue_size: 50,
   frequency: 5,
   batch_processor: batch_processor,
-  event_broadcaster: event_broadcaster
+  event_broadcaster: event_broadcaster,
+  result_converter: result_converter
 )
 ```
 
@@ -80,6 +87,7 @@ class BatchProcessor
     jobs.each do |job|
       puts "Processing job #{job.id} with data #{job.data}"
     end
+    jobs
   end
 end
 
@@ -89,21 +97,31 @@ class EventBroadcaster
   end
 end
 
+class ResultConverter
+  def convert(results)
+    results.map.with_index do |_result, index|
+      index % 2 == 0 ? true : { error: 'Failed to process job' }
+    end
+  end
+end
+
 batch_processor = BatchProcessor.new
 event_broadcaster = EventBroadcaster.new
+result_converter = ResultConverter.new
 
 batcher = MicroBatching::Batcher.new(
   batch_size: 10,
   max_queue_size: 50,
   frequency: 10,
   batch_processor: batch_processor,
-  event_broadcaster: event_broadcaster
+  event_broadcaster: event_broadcaster,
+  result_converter: result_converter
 )
 
-@shutdown = false
+@stop_submitting_job = false
 
 job_submitter_one = Thread.new do
-  while !@shutdown
+  while !@stop_submitting_job
     sleep(1)
     job = MicroBatching::Job.new("job-submitter-one-#{SecureRandom.uuid}")
     batcher.submit(job)
@@ -111,7 +129,7 @@ job_submitter_one = Thread.new do
 end
 
 job_submitter_two = Thread.new do
-  while !@shutdown
+  while !@stop_submitting_job
     sleep(2)
     job = MicroBatching::Job.new("job-submitter-two-#{SecureRandom.uuid}")
     batcher.submit(job)
@@ -120,7 +138,7 @@ end
 
 sleep(50)
 
-@shutdown = true
+@stop_submitting_job = true
 job_submitter_one.join
 job_submitter_two.join
 

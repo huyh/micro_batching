@@ -11,6 +11,7 @@ class MockBatchProcessor
     jobs.each do |job|
       @processed_jobs << job
     end
+    jobs
   end
 end
 
@@ -26,6 +27,14 @@ class MockEventBroadcaster
   end
 end
 
+class MockResultConverter
+  def convert(results)
+    results.map.with_index do |_result, index|
+      index % 2 == 0 ? true : { error: 'An error occurred' }
+    end
+  end
+end
+
 def submit_jobs(batcher, count)
   Thread.new do
     count.times do |i|
@@ -38,14 +47,20 @@ end
 RSpec.describe MicroBatching::Batcher do
   let(:batch_processor) { MockBatchProcessor.new }
   let(:event_broadcaster) { MockEventBroadcaster.new }
+  let(:result_converter) { MockResultConverter.new }
   let(:batcher) {
     MicroBatching::Batcher.new(
       batch_size: 10,
       max_queue_size: 50,
       frequency: 0.02,
       batch_processor: batch_processor,
-      event_broadcaster: event_broadcaster)
+      event_broadcaster: event_broadcaster
+    )
   }
+
+  after do
+    batcher.shutdown
+  end
 
   describe '#initialize' do
     it 'sets the id' do
@@ -154,6 +169,28 @@ RSpec.describe MicroBatching::Batcher do
       expect(event_broadcaster.events.select { |event| event[:event] == 'job-submitted' }.size).to eq(31)
       expect(event_broadcaster.events.select { |event| event[:event] == 'job-processing' }.size).to eq(31)
       expect(event_broadcaster.events.select { |event| event[:event] == 'job-completed' }.size).to eq(31)
+    end
+
+    context 'when a result converter is provided' do
+      let(:batcher) {
+        MicroBatching::Batcher.new(
+          batch_size: 10,
+          max_queue_size: 50,
+          frequency: 0.02,
+          batch_processor: batch_processor,
+          event_broadcaster: event_broadcaster,
+          result_converter: result_converter
+        )
+      }
+
+      it 'broadcasts job-completed and job-failed events based on the result converter output' do
+        submit_jobs(batcher, 9)
+
+        sleep(0.2)
+
+        expect(event_broadcaster.events.select { |event| event[:event] == 'job-completed' }.size).to eq(5)
+        expect(event_broadcaster.events.select { |event| event[:event] == 'job-failed' }.size).to eq(4)
+      end
     end
 
     context 'when shutdown is requested' do

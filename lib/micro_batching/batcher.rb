@@ -42,18 +42,38 @@ module MicroBatching
     # @param max_queue_size [Integer] The maximum number of jobs allowed in the queue.
     # @param frequency [Float] The interval (in seconds) for processing batches.
     # @param batch_processor [Object] The processor that handles job batches.
-    # @param event_broadcaster [Object, nil] Optional broadcaster for job and batch status updates.
+    # @param event_broadcaster [Object, nil] An optional broadcaster for job and batch status updates.
+    # @param result_converter [Object, nil] An optional converter that transforms the result returned
+    # by the batch_processor's process function into an array format, such as [true, { error: 'An error message' }, ...].
+    # For example, a bulk insert request to BigQuery will returns in the following format:
+    # {
+    #   "kind": "bigquery#tableDataInsertAllResponse",
+    #   "insertErrors": [
+    #     {
+    #       "index": 0,
+    #       "errors": [
+    #         {
+    #           "reason": "invalid",
+    #           "location": "field_name",
+    #           "debugInfo": "Detailed error message",
+    #           "message": "Specific error message describing the failure"
+    #         }
+    #       ]
+    #     }
+    #   ]
+    # }
     #
     # @return [MicroBatching::Batcher]
-    def initialize(batch_size:, max_queue_size:, frequency:, batch_processor:, event_broadcaster: nil)
+    def initialize(batch_size:, max_queue_size:, frequency:, batch_processor:, event_broadcaster: nil, result_converter: nil)
       @id = SecureRandom.uuid
       @batch_size = batch_size
       @max_queue_size = max_queue_size
       @frequency = frequency
       @batch_processor = batch_processor
       @event_broadcaster = event_broadcaster
+      @result_converter = result_converter
       @jobs_queue = Thread::Queue.new
-      @shutdown_requested = Concurrent::AtomicBoolean.new(false)
+      @shutdown = Concurrent::AtomicBoolean.new(false)
       start
     end
 
@@ -66,7 +86,7 @@ module MicroBatching
     #
     # @return [MicroBatching::JobResult] The job result object associated with the job.
     def submit(job)
-      if @shutdown_requested.true?
+      if @shutdown.true?
         raise MicroBatching::Errors::BatcherShuttingDownError.new('Batcher is shutting down')
       end
 
@@ -87,7 +107,7 @@ module MicroBatching
     # @return [Boolean] Returns true once all jobs are processed and the batcher is shut down.
     def shutdown
       broadcast_event(BATCHER_SHUTTING_DOWN, { id: @id })
-      @shutdown_requested.make_true
+      @shutdown.make_true
       @timer_task.wait_for_termination
       broadcast_event(BATCHER_SHUTDOWN, { id: @id })
       true
@@ -124,12 +144,12 @@ module MicroBatching
       if batch.any?
         broadcast_event_for_jobs(batch, JOB_PROCESSING)
         result = @batch_processor.process(batch)
-        broadcast_event_for_jobs(batch, JOB_COMPLETED)
+        broadcast_events_for_processed_batch(batch, result)
       end
     rescue StandardError => e
       broadcast_event_for_jobs(batch, JOB_FAILED, { error: e.message })
     ensure
-      @timer_task.shutdown if @shutdown_requested.true? && @jobs_queue.empty?
+      @timer_task.shutdown if @shutdown.true? && @jobs_queue.empty?
     end
 
     # Broadcasts a general event through the event broadcaster, if available.
@@ -141,6 +161,7 @@ module MicroBatching
     def broadcast_event(event, data)
       @event_broadcaster&.broadcast(event, data)
     end
+
 
     # Broadcasts an event for each job in a batch.
     #
@@ -164,6 +185,36 @@ module MicroBatching
     # @return [void]
     def broadcast_event_for_job(job, event, data = {})
       broadcast_event(event, data.merge(id: job.id))
+    end
+
+    # Broadcasts events for each job in a processed batch based on the processing result.
+    #
+    # If an event broadcaster is available, this method sends a `JOB_COMPLETED` or `JOB_FAILED` event
+    # for each job in the batch, depending on the result of the batch processing. If a `result_converter`
+    # is present, the processing result is first converted, where each converted result should be `true`
+    # for success or a hash containing an `:error` key for failure.
+    #
+    # @param batch [Array<MicroBatching::Job>] The batch of jobs to process.
+    # @param processed_batch_result [Object] The result returned from the batch processor, which is passed
+    #   to the `result_converter` (if defined) to determine individual job outcomes.
+    #
+    # @return [void]
+    def broadcast_events_for_processed_batch(batch, processed_batch_result)
+      if @event_broadcaster
+        if @result_converter
+          converted_results = @result_converter.convert(processed_batch_result)
+
+          converted_results.each_with_index do |result, index|
+            if result == true
+              broadcast_event_for_job(batch[index], JOB_COMPLETED)
+            else
+              broadcast_event_for_job(batch[index], JOB_FAILED, { error: result[:error] })
+            end
+          end
+        else
+          broadcast_event_for_jobs(batch, JOB_COMPLETED)
+        end
+      end
     end
   end
 end
