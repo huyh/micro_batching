@@ -142,9 +142,8 @@ sleep(50)
 job_submitter_one.join
 job_submitter_two.join
 
-batcher.shutdown
-
-sleep(20)
+shutdown = batcher.shutdown
+puts "Batcher shutdown: #{shutdown}"
 ```
 
 ## Testing
